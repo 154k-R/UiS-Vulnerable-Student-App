@@ -55,7 +55,11 @@ def profile_by_id(request: Request, user_id: int):
     user = get_user_from_session(request)
     if not user:
         return RedirectResponse("/login", status_code=302)
-    profile = run_query("SELECT * FROM users WHERE id=%s", (user_id,), fetchone=True)
+    profile = run_query("SELECT * FROM users WHERE id=%s AND id=%s", (user_id, user["id"]), fetchone=True)
+    if not profile:
+        return templates.TemplateResponse(
+            "not_found.html", {"request": request, "user": user}, status_code=404
+        )
     return templates.TemplateResponse("profile.html", {"request": request, "user": user, "profile": profile})
 
 
