@@ -1,4 +1,3 @@
-import traceback
 import requests
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
@@ -44,16 +43,3 @@ def import_resource_get(request: Request, url: str = ""):
 @router.post("/resources/import", response_class=HTMLResponse)
 def import_resource_post(request: Request, url: str = Form(...)):
     return import_resource_get(request, url)
-
-
-@router.get("/error", response_class=HTMLResponse)
-def trigger_error(request: Request):
-    try:
-        x = 1 / 0
-        return {"x": x}
-    except Exception:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "details": traceback.format_exc()},
-            status_code=500,
-        )

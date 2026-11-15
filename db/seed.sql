@@ -7,6 +7,11 @@ INSERT INTO users (id, email, full_name, password_hash, role, phone, address, bi
 (6, 'charlie@student.uis.no', 'Charlie Berg', 'f59c8846af83a901e50b706c164d53cdebc8617cddd538b5a49e4a1d5ac99674', 'student', '+47 40001006', 'Stavanger', 'Works on secure coding exercises.')
 ON CONFLICT (id) DO NOTHING;
 
+SELECT setval(
+	pg_get_serial_sequence('users', 'id'),
+	COALESCE((SELECT MAX(id) FROM users), 1)
+);
+
 INSERT INTO courses (id, title, description) VALUES
 (1, 'DAT250 Information and Software Security', 'Core course on practical software security.'),
 (2, 'DAT220 Database Systems', 'Relational design, SQL, and transactions.'),
