@@ -1,4 +1,4 @@
-import time
+import secrets
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -8,6 +8,9 @@ from app.email_service import send_reset_email
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+# Reset tokens are valid for this many minutes after they are issued.
+TOKEN_TTL_MINUTES = 30
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -86,7 +89,7 @@ def reset_password_request(request: Request, email: str = Form(...)):
             {"request": request, "mode": "request", "message": "No user found with that email."},
         )
 
-    token = str(int(time.time()))[-6:]
+    token = secrets.token_urlsafe(32)
     run_query(
         "INSERT INTO password_reset_tokens (user_id, token) VALUES (%s, %s)",
         (user["id"], token),
@@ -107,19 +110,32 @@ def reset_password_token_page(request: Request, token: str):
 @router.post("/reset-password/{token}", response_class=HTMLResponse)
 def reset_password_token(request: Request, token: str, new_password: str = Form(...)):
     token_row = run_query(
-        "SELECT * FROM password_reset_tokens WHERE token=%s ORDER BY created_at DESC LIMIT 1",
-        (token,),
+        """
+        SELECT * FROM password_reset_tokens
+        WHERE token=%s
+          AND created_at > NOW() - (%s * INTERVAL '1 minute')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (token, TOKEN_TTL_MINUTES),
         fetchone=True,
     )
     if not token_row:
         return templates.TemplateResponse(
             "reset_password.html",
-            {"request": request, "mode": "set", "token": token, "message": "Invalid token"},
+            {"request": request, "mode": "set", "token": token, "message": "Invalid or expired token"},
         )
 
     run_query(
         "UPDATE users SET password_hash=%s WHERE id=%s",
         (hash_password(new_password), token_row["user_id"]),
+        commit=True,
+    )
+    # Single-use: consume every outstanding reset token for this account so the
+    # link cannot be replayed and any older links are invalidated too.
+    run_query(
+        "DELETE FROM password_reset_tokens WHERE user_id=%s",
+        (token_row["user_id"],),
         commit=True,
     )
     return RedirectResponse("/login", status_code=302)
