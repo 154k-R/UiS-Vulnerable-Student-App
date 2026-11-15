@@ -1,15 +1,31 @@
-import hashlib
 import secrets
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Request
 from app.database import run_query
 
 
+password_hasher = PasswordHasher()
+
+
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    return password_hasher.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return hash_password(password) == password_hash
+    try:
+        return password_hasher.verify(password_hash, password)
+    except (VerificationError, InvalidHashError):
+        return False
+
+
+def is_strong_password(password: str) -> bool:
+    # At least 8 characters with both letters and digits.
+    return (
+        len(password) >= 8
+        and any(c.isalpha() for c in password)
+        and any(c.isdigit() for c in password)
+    )
 
 
 def create_session(user_id: int) -> str:

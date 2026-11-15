@@ -2,7 +2,7 @@ import secrets
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from app.auth import hash_password, verify_password, create_session, clear_session, get_user_from_session
+from app.auth import hash_password, verify_password, is_strong_password, create_session, clear_session, get_user_from_session
 from app.database import run_query
 from app.email_service import send_reset_email
 
@@ -11,6 +11,8 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Reset tokens are valid for this many minutes after they are issued.
 TOKEN_TTL_MINUTES = 30
+
+WEAK_PASSWORD_ERROR = "Password must be at least 8 characters and contain both letters and digits."
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -49,6 +51,10 @@ def register_page(request: Request):
 
 @router.post("/register", response_class=HTMLResponse)
 def register(request: Request, email: str = Form(...), full_name: str = Form(...), password: str = Form(...)):
+    if not is_strong_password(password):
+        return templates.TemplateResponse(
+            "register.html", {"request": request, "error": WEAK_PASSWORD_ERROR}, status_code=400
+        )
     existing = run_query("SELECT id FROM users WHERE email=%s", (email,), fetchone=True)
     if existing:
         return templates.TemplateResponse(
@@ -124,6 +130,12 @@ def reset_password_token(request: Request, token: str, new_password: str = Form(
         return templates.TemplateResponse(
             "reset_password.html",
             {"request": request, "mode": "set", "token": token, "message": "Invalid or expired token"},
+        )
+    if not is_strong_password(new_password):
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "mode": "set", "token": token, "message": WEAK_PASSWORD_ERROR},
+            status_code=400,
         )
 
     run_query(
