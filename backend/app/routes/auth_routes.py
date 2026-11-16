@@ -1,4 +1,5 @@
 import secrets
+import time
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -11,6 +12,14 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Reset tokens are valid for this many minutes after they are issued.
 TOKEN_TTL_MINUTES = 30
+
+# Brute-force protection. Failed login times per e-mail (kept in memory).
+MAX_FAILED_LOGINS = 5
+LOCKOUT_SECONDS = 15 * 60
+failed_logins: dict[str, list[float]] = {}
+
+# Checked when the e-mail does not exist, so the response takes the same time.
+DUMMY_HASH = hash_password(secrets.token_hex(16))
 
 WEAK_PASSWORD_ERROR = "Password must be at least 8 characters and contain both letters and digits."
 
@@ -28,16 +37,26 @@ def login_page(request: Request):
 
 @router.post("/login", response_class=HTMLResponse)
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
-    user = run_query("SELECT * FROM users WHERE email=%s", (email,), fetchone=True)
-    if not user:
+    # Only count failures from the last 15 minutes.
+    now = time.time()
+    recent = [t for t in failed_logins.get(email, []) if now - t < LOCKOUT_SECONDS]
+    if len(recent) >= MAX_FAILED_LOGINS:
         return templates.TemplateResponse(
-            "login.html", {"request": request, "error": "No account found with that email."}
-        )
-    if not verify_password(password, user["password_hash"]):
-        return templates.TemplateResponse(
-            "login.html", {"request": request, "error": "Invalid password for this account."}
+            "login.html",
+            {"request": request, "error": "Too many failed attempts. Try again in 15 minutes."},
+            status_code=429,
         )
 
+    user = run_query("SELECT * FROM users WHERE email=%s", (email,), fetchone=True)
+    stored_hash = user["password_hash"] if user else DUMMY_HASH
+    if not verify_password(password, stored_hash) or not user:
+        # Same message whether the e-mail or the password was wrong.
+        failed_logins[email] = recent + [now]
+        return templates.TemplateResponse(
+            "login.html", {"request": request, "error": "Invalid email or password."}, status_code=401
+        )
+
+    failed_logins.pop(email, None)
     token = create_session(user["id"])
     resp = RedirectResponse("/dashboard", status_code=302)
     resp.set_cookie("session_token", token)
@@ -89,22 +108,18 @@ def reset_password_page(request: Request):
 @router.post("/reset-password", response_class=HTMLResponse)
 def reset_password_request(request: Request, email: str = Form(...)):
     user = run_query("SELECT * FROM users WHERE email=%s", (email,), fetchone=True)
-    if not user:
-        return templates.TemplateResponse(
-            "reset_password.html",
-            {"request": request, "mode": "request", "message": "No user found with that email."},
+    if user:
+        token = secrets.token_urlsafe(32)
+        run_query(
+            "INSERT INTO password_reset_tokens (user_id, token) VALUES (%s, %s)",
+            (user["id"], token),
+            commit=True,
         )
-
-    token = secrets.token_urlsafe(32)
-    run_query(
-        "INSERT INTO password_reset_tokens (user_id, token) VALUES (%s, %s)",
-        (user["id"], token),
-        commit=True,
-    )
-    send_reset_email(email, token)
+        send_reset_email(email, token)
+    # Same answer whether or not the account exists.
     return templates.TemplateResponse(
         "reset_password.html",
-        {"request": request, "mode": "request", "message": f"Reset email sent to {email}."},
+        {"request": request, "mode": "request", "message": "If the account exists, a reset email has been sent."},
     )
 
 
